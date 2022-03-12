@@ -1,0 +1,10 @@
+
+# IntelliJ project files
+.idea
+*.iml
+out
+gen
+pretrained_ckpt/*.pth
+runs/logs_base/model_1/*.0
+patient_information/*.csv
+saved_model/*
