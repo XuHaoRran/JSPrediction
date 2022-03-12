@@ -5,6 +5,13 @@
 out
 gen
 pretrained_ckpt/*
-runs/logs_base/model_1/*.*
-patient_information/*.*
-saved_model/*.*
+runs/logs_base/model_1/*
+patient_information/*
+saved_model/*
+!pretrained_ckpt/
+!runs/*
+!runs/*/
+!runs/logs_base/*
+!runs/logs_base/*/
+!runs/logs_base/model_1/
+!saved_model/
