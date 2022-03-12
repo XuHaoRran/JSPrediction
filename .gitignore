@@ -4,11 +4,7 @@
 *.iml
 out
 gen
-pretrained_ckpt/swin_tiny_patch4_window7_224.pth
+pretrained_ckpt/*
 runs/logs_base/model_1/*.*
 patient_information/*.*
 saved_model/*.*
-!saved_model/
-!patient_information/
-!pretrained_ckpt/
-!runs/logs_base/model_1/
