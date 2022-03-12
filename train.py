@@ -16,10 +16,9 @@ from torch.utils.tensorboard import SummaryWriter
 from config import get_config
 from dataset.brats import get_sorted_true_surival_list, get_datasets, write_patient_csv
 from loss.loss import JointLoss
-from loss.dice import EDiceLoss_Val
 from utils import AverageMeter, ProgressMeter, save_checkpoint, reload_ckpt_bis, \
     count_parameters, save_metrics, save_args_1, inference, post_trans, dice_metric, \
-    dice_metric_batch
+    dice_metric_batch, cal_cindex
 from vtunet.vision_transformer import VTUNet as ViT_seg
 
 torch.backends.cudnn.benchmark = False
@@ -142,8 +141,10 @@ def main(args):
 
     # 获取full_train_dataset的survival序列
     true_train_survival = get_sorted_true_surival_list(full_train_dataset)
+
     # 获取val_dataset的survival序列
     true_val_survival = get_sorted_true_surival_list(l_val_dataset)
+    sorted_event = [a[1] for a in true_val_survival]
 
     #write patients information to csv.
     write_patient_csv(full_train_dataset.datas, 'patient_information/train.csv')
@@ -251,16 +252,18 @@ def main(args):
             # Validate at the end of epoch every val step
             if (epoch + 1) % args.val == 0:
                 mode = "val"
-                validation_loss_1, validation_dice = step(val_loader, model_1, criterian_val, metric, epoch, t_writer_1,
+                validation_loss_1, validation_dice, validation_cindex = step(val_loader, model_1, criterian_val, metric, epoch, t_writer_1,
+                                                          true_val_survival,
                                                           save_folder=args.save_folder_1,
                                                           patients_perf=patients_perf)
 
+                t_writer_1.add_scalar(f"SummaryCIndex{''}", validation_cindex, epoch)
                 t_writer_1.add_scalar(f"SummaryLoss", validation_loss_1, epoch)
                 t_writer_1.add_scalar(f"SummaryDice", validation_dice, epoch)
 
-                if validation_dice > best_1:
-                    print(f"Saving the model with DSC {validation_dice}")
-                    best_1 = validation_dice
+                if validation_cindex > best_1:
+                    print(f"Saving the model with DSC {validation_cindex}")
+                    best_1 = validation_cindex
                     model_dict = model_1.state_dict()
                     save_checkpoint(
                         dict(
@@ -280,7 +283,9 @@ def main(args):
             break
 
 
-def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None, patients_perf=None):
+def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival, save_folder=None, patients_perf=None):
+    risk_sequence = torch.linspace(1, 0, len(true_val_survival))
+
     # Setup
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -298,6 +303,8 @@ def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None,
     metrics = []
 
     for i, val_data in enumerate(data_loader):
+
+
         # measure data loading time
         data_time.update(time.perf_counter() - end)
 
@@ -315,8 +322,14 @@ def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None,
                     val_data["image"],
                     val_data["label"],
                 )
+
             val_seg, val_risk = inference(val_inputs, model)
             val_seg_1 = [post_trans(i) for i in decollate_batch(val_seg)]
+
+            # pack risk
+            for j, t in enumerate(true_val_survival):
+                if patient_id == t[0]:
+                    risk_sequence[j] = val_risk
 
             segs = val_seg
             targets = val_labels
@@ -332,6 +345,7 @@ def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None,
                           loss_.item(),
                           global_step=batch_per_epoch * epoch + i)
 
+
         # measure accuracy and record loss_
         if not np.isnan(loss_.item()):
             losses.update(loss_.item())
@@ -339,6 +353,9 @@ def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None,
             surv_losses.update(surv_loss_.item())
         else:
             print("NaN in model loss!!")
+
+
+
 
         metric_ = metric(segs, targets)
         metrics.extend(metric_)
@@ -349,16 +366,19 @@ def step(data_loader, model, criterion, metric, epoch, writer, save_folder=None,
         # Display progress
         progress.display(i)
 
+    cindex = cal_cindex(true_val_survival, risk_sequence)
     save_metrics(epoch, metrics, writer, epoch, False, save_folder)
+
     writer.add_scalar(f"SummaryLoss/val/joint", losses.avg, epoch)
     writer.add_scalar(f"SummaryLoss/val/seg", seg_losses.avg, epoch)
     writer.add_scalar(f"SummaryLoss/val/surv", surv_losses.avg, epoch)
+
 
     dice_values = dice_metric.aggregate().item()
     dice_metric.reset()
     dice_metric_batch.reset()
 
-    return losses.avg, dice_values
+    return losses.avg, dice_values, cindex
 
 
 if __name__ == '__main__':

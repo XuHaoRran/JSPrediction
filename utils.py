@@ -18,7 +18,17 @@ from monai.transforms import (
     EnsureType
 )
 from numpy import logical_and as l_and, logical_not as l_not
+from lifelines.utils import concordance_index
 from torch import distributed as dist
+
+
+
+
+
+
+
+
+
 
 
 def save_args(args):
@@ -318,6 +328,12 @@ def generate_segmentations_monai(data_loader, model, writer_1, args):
 
 
 
+def cal_cindex(true_survival, pred_risks):
+    true_surv = [a[2] for a in true_survival]
+    pred_risks = pred_risks[0] / pred_risks
+
+    c_indx = concordance_index(true_surv, pred_risks)
+    return c_indx
 
 
 HAUSSDORF = "haussdorf"
@@ -328,3 +344,10 @@ SSIM = "ssim"
 # METRICS = [HAUSSDORF, DICE, SENS, SPEC, SSIM]
 METRICS = [DICE]
 
+
+if __name__ == '__main__':
+    true_surv = torch.as_tensor([0.76, 0.76, 0.33, 0.11])
+    pred_risks = torch.as_tensor([1,2,3,4])
+    true_surv = true_surv[0] / true_surv
+    c_indx = concordance_index(true_surv, pred_risks)
+    print(c_indx)
