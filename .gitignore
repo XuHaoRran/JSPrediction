@@ -5,6 +5,6 @@
 out
 gen
 pretrained_ckpt/swin_tiny_patch4_window7_224.pth
-runs/logs_base/model_1/*
-patient_information/*
-saved_model/*
+runs/logs_base/model_1/*.*
+patient_information/*.*
+saved_model/*.*
