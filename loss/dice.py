@@ -10,7 +10,6 @@ class EDiceLoss(nn.Module):
         super(EDiceLoss, self).__init__()
         self.do_sigmoid = do_sigmoid
         self.labels = ["tumor", "node"]
-        self.device = "cpu"
 
     def binary_dice(self, inputs, targets, label_index, metric_mode=False):
         smooth = 1.
@@ -68,7 +67,6 @@ class EDiceLoss_Val(nn.Module):
         super(EDiceLoss_Val, self).__init__()
         self.do_sigmoid = do_sigmoid
         self.labels = ["tumor", "node"]
-        self.device = "cpu"
 
     def binary_dice(self, inputs, targets, label_index, metric_mode=False):
         smooth = 1.

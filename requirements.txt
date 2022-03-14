@@ -12,3 +12,4 @@ pandas
 numpy
 scikit-image
 fvcore
+lifelines

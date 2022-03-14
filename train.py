@@ -23,8 +23,8 @@ from vtunet.vision_transformer import VTUNet as ViT_seg
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.enabled = False
-is_cuda = 0
-if is_cuda == 1:
+device = 'cpu'
+if device == 'gpu':
     torch.cuda.set_device(0)
 
 parser = argparse.ArgumentParser(description='VTUNET BRATS 2021 Training')
@@ -85,7 +85,7 @@ def main(args):
 
     config = get_config(args)
 
-    if is_cuda == 1:
+    if device == 'gpu':
         model_1 = ViT_seg(config, num_classes=args.num_classes,
                       embed_dim=yaml_cfg.get("MODEL").get("SWIN").get("EMBED_DIM"),
                       win_size=yaml_cfg.get("MODEL").get("SWIN").get("WINDOW_SIZE")).cuda()
@@ -106,7 +106,7 @@ def main(args):
 
 
     print(f"total number of trainable parameters {count_parameters(model_1)}")
-    if is_cuda == 1:
+    if device == 'gpu':
         model_1 = model_1.cuda()
     else:
         model_1 = model_1
@@ -115,11 +115,11 @@ def main(args):
     with model_file.open("w") as f:
         print(model_1, file=f)
 
-    if is_cuda == 1:
-        criterion = JointLoss().cuda()
-        criterian_val = JointLoss(mode='val').cuda()
+    if device == 'gpu':
+        criterion = JointLoss(mode='train', device=device).cuda()
+        criterian_val = JointLoss(mode='val', device=device).cuda()
     else:
-        criterion = JointLoss()
+        criterion = JointLoss(mode='train')
         criterian_val = JointLoss(mode='val')
 
     ediceLoss_Val = criterian_val.EDiceLoss_Val
@@ -144,7 +144,14 @@ def main(args):
 
     # 获取val_dataset的survival序列
     true_val_survival = get_sorted_true_surival_list(l_val_dataset)
-    sorted_event = [a[1] for a in true_val_survival]
+
+    # event sorted by true dmfs.
+    sorted_train_event = torch.as_tensor([a[1] for a in true_train_survival])
+    sorted_val_event = torch.as_tensor([a[1] for a in true_val_survival])
+    if device == 'gpu':
+        sorted_train_event = sorted_train_event.cuda()
+        sorted_val_event = sorted_train_event.cuda()
+
 
     #write patients information to csv.
     write_patient_csv(full_train_dataset.datas, 'patient_information/train.csv')
@@ -158,6 +165,8 @@ def main(args):
 
     # Initiate risk_sequence.
     risk_sequence = torch.linspace(1, 0, len(true_train_survival))
+    if device == 'gpu':
+        risk_sequence = risk_sequence.cuda()
 
     print("start training now!")
 
@@ -192,7 +201,7 @@ def main(args):
                 inputs_S1, labels_S1 = batch[0]["image"].float(), batch[0]["label"].float()
 
                 inputs_S1, labels_S1, risk_sequence = Variable(inputs_S1), Variable(labels_S1), Variable(risk_sequence)
-                if is_cuda == 1:
+                if device == 'gpu':
                     inputs_S1, labels_S1, risk_sequence = inputs_S1.cuda(), labels_S1.cuda(), risk_sequence.cuda()
 
                 optimizer.zero_grad()
@@ -205,11 +214,11 @@ def main(args):
                     for j, t in enumerate(true_train_survival):
                         if id == t[0]:
                             risk_sequence[j] = risk[k]
-                # event sorted by true dmfs.
-                sorted_event = [a[1] for a in true_train_survival]
+
+
 
                 pred_dict['seg'], pred_dict['surv'] = segs_S1, risk_sequence
-                label_dict['seg'], label_dict['surv'] = labels_S1, torch.as_tensor(sorted_event)
+                label_dict['seg'], label_dict['surv'] = labels_S1, sorted_train_event
 
                 loss_, seg_loss_, surv_loss_ = criterion(pred_dict, label_dict)
 
@@ -241,6 +250,8 @@ def main(args):
                 # Display progress
                 progress.display(i)
 
+                break
+
             t_writer_1.add_scalar(f"SummaryLoss/train/joint", losses_.avg, epoch)
             t_writer_1.add_scalar(f"SummaryLoss/train/seg", seg_losses_.avg, epoch)
             t_writer_1.add_scalar(f"SummaryLoss/train/surv", surv_losses_.avg, epoch)
@@ -253,7 +264,7 @@ def main(args):
             if (epoch + 1) % args.val == 0:
                 mode = "val"
                 validation_loss_1, validation_dice, validation_cindex = step(val_loader, model_1, criterian_val, metric, epoch, t_writer_1,
-                                                          true_val_survival,
+                                                          true_val_survival, sorted_val_event,
                                                           save_folder=args.save_folder_1,
                                                           patients_perf=patients_perf)
 
@@ -280,11 +291,12 @@ def main(args):
 
         except KeyboardInterrupt:
             print("Stopping training loop, doing benchmark")
-            break
 
 
-def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival, save_folder=None, patients_perf=None):
+def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival, sorted_val_event,  save_folder=None, patients_perf=None):
     risk_sequence = torch.linspace(1, 0, len(true_val_survival))
+    if device == 'gpu':
+        risk_sequence = risk_sequence.cuda()
 
     # Setup
     batch_time = AverageMeter('Time', ':6.3f')
@@ -312,7 +324,7 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
 
         model.eval()
         with torch.no_grad():
-            if is_cuda == 1:
+            if device == 'gpu':
                 val_inputs, val_labels = (
                     val_data["image"].cuda(),
                     val_data["label"].cuda(),
@@ -322,8 +334,10 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
                     val_data["image"],
                     val_data["label"],
                 )
+            if device == 'cpu':
+                val_inputs = val_inputs.float()
 
-            val_seg, val_risk = inference(val_inputs, model)
+            val_seg, val_risk = model(val_inputs)
             val_seg_1 = [post_trans(i) for i in decollate_batch(val_seg)]
 
             # pack risk
@@ -333,7 +347,12 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
 
             segs = val_seg
             targets = val_labels
-            loss_, seg_loss_, surv_loss_ = criterion(segs, targets)
+
+            pred_dict, label_dict = dict(), dict()
+            pred_dict['seg'], pred_dict['surv'] = val_seg, risk_sequence
+            label_dict['seg'], label_dict['surv'] = val_labels, sorted_val_event
+
+            loss_, seg_loss_, surv_loss_ = criterion(pred_dict, label_dict)
             dice_metric(y_pred=val_seg_1, y=val_labels)
 
         if patients_perf is not None:

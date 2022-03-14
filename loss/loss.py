@@ -6,8 +6,11 @@ from .survival import SurvivalLoss
 
 class JointLoss(nn.Module):
     """JointLoss = SegLoss + SurvLoss"""
-    def __init__(self, mode='train'):
+    def __init__(self, mode='train', device='gpu'):
         super(JointLoss, self).__init__()
+
+
+
         if mode == 'train':
             self.SegLoss = EDiceLoss()
         else:
@@ -16,6 +19,8 @@ class JointLoss(nn.Module):
         self.SurvLoss = SurvivalLoss()
         self.EDiceLoss_Val = EDiceLoss_Val()
 
+        if device == 'gpu':
+            self.SegLoss, self.SurvLoss, self.EDiceLoss_Val = self.SegLoss.cuda(), self.SurvLoss.cuda(), self.EDiceLoss_Val.cuda()
 
     def forward(self, pred_dict, label_dict):
 

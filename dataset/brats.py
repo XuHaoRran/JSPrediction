@@ -11,13 +11,13 @@ from dataset.image_utils import pad_or_crop_image, irm_min_max_preprocess, zscor
 
 
 class Brats(Dataset):
-    def __init__(self, patients_dir, benchmarking=False, training=True, data_aug=False,
+    def __init__(self, patients_dir, benchmarking=False, on='train', data_aug=False,
                  no_seg=False, normalisation="minmax"):
         super(Brats, self).__init__()
         self.benchmarking = benchmarking
         self.normalisation = normalisation
         self.data_aug = data_aug
-        self.training = training
+        self.on = on
         self.datas = []
         self.validation = no_seg
         self.patterns = ["_t1", "_t1c", "_t2"]
@@ -65,7 +65,7 @@ class Brats(Dataset):
         else:
             patient_label = np.zeros(patient_image.shape)  # placeholders, not gonna use it
             et_present = 0
-        if self.training:
+        if self.on == 'train' or self.on =='val':
             # Remove maximum extent of the zero-background to make future crop more useful
             z_indexes, y_indexes, x_indexes = np.nonzero(np.sum(patient_image, axis=0) != 0)
             # Add 1 pixel in each side
@@ -82,6 +82,7 @@ class Brats(Dataset):
             zmax, ymax, xmax = [int(np.max(arr) + 1) for arr in (z_indexes, y_indexes, x_indexes)]
             patient_image = patient_image[:, zmin:zmax, ymin:ymax, xmin:xmax]
             patient_label = patient_label[:, zmin:zmax, ymin:ymax, xmin:xmax]
+
 
         patient_image, patient_label = patient_image.astype("float16"), patient_label.astype("bool")
         patient_image, patient_label = [torch.from_numpy(x) for x in [patient_image, patient_label]]
@@ -122,9 +123,9 @@ def get_datasets(seed, on="train", fold_number=0, normalisation="minmax"):
     # test = [patients_dir[i] for i in test_index]
 
     # return patients_dir
-    train_dataset = Brats(train, training=True,
+    train_dataset = Brats(train, on='train',
                           normalisation=normalisation)
-    val_dataset = Brats(val, training=False, data_aug=False,
+    val_dataset = Brats(val, on='val', data_aug=False,
                         normalisation=normalisation)
     # bench_dataset = Brats(test, training=False, benchmarking=True,
     #                       normalisation=normalisation)
@@ -137,7 +138,7 @@ def get_test_datasets(seed, on="train", fold_number=0, normalisation="minmax"):
     assert base_folder.exists()
     patients_dir = sorted([x for x in base_folder.iterdir() if x.is_dir()])
 
-    bench_dataset = Brats(patients_dir, training=False, benchmarking=True,
+    bench_dataset = Brats(patients_dir, training=False, benchmarking=True, on=on,
                           normalisation=normalisation)
     return bench_dataset
 

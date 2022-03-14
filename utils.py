@@ -9,7 +9,8 @@ import torch
 import yaml
 from matplotlib import pyplot as plt
 from monai.data import decollate_batch
-from monai.inferers import sliding_window_inference
+# from monai.inferers import sliding_window_inference
+from monai_impl.infer import sliding_window_inference
 from monai.metrics import DiceMetric
 from monai.transforms import (
     Activations,
@@ -20,15 +21,6 @@ from monai.transforms import (
 from numpy import logical_and as l_and, logical_not as l_not
 from lifelines.utils import concordance_index
 from torch import distributed as dist
-
-
-
-
-
-
-
-
-
 
 
 def save_args(args):
@@ -237,7 +229,10 @@ VAL_AMP = True
 
 
 # define inference method
-def inference(input, model):
+def inference(input, model, device):
+    if device == 'cpu':
+        model = model.float()
+        input = input.float()
     def _compute(input):
         return sliding_window_inference(
             inputs=input,
