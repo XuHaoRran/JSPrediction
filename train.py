@@ -148,9 +148,7 @@ def main(args):
     # event sorted by true dmfs.
     sorted_train_event = torch.as_tensor([a[1] for a in true_train_survival])
     sorted_val_event = torch.as_tensor([a[1] for a in true_val_survival])
-    if device == 'gpu':
-        sorted_train_event = sorted_train_event.cuda()
-        sorted_val_event = sorted_train_event.cuda()
+
 
 
     #write patients information to csv.
@@ -186,7 +184,7 @@ def main(args):
             batch_per_epoch = len(train_loader)
             progress = ProgressMeter(
                 batch_per_epoch,
-                [batch_time, data_time, losses_],
+                [batch_time, data_time, losses_, seg_losses_, surv_losses_],
                 prefix=f"train Epoch: [{epoch}]")
 
             end = time.perf_counter()
@@ -214,8 +212,12 @@ def main(args):
                     for j, t in enumerate(true_train_survival):
                         if id == t[0]:
                             risk_sequence[j] = risk[k]
+                            break
 
 
+                if device == 'gpu':
+                    sorted_train_event = sorted_train_event.cuda()
+                    sorted_val_event = sorted_val_event.cuda()
 
                 pred_dict['seg'], pred_dict['surv'] = segs_S1, risk_sequence
                 label_dict['seg'], label_dict['surv'] = labels_S1, sorted_train_event
@@ -250,8 +252,6 @@ def main(args):
                 # Display progress
                 progress.display(i)
 
-                break
-
             t_writer_1.add_scalar(f"SummaryLoss/train/joint", losses_.avg, epoch)
             t_writer_1.add_scalar(f"SummaryLoss/train/seg", seg_losses_.avg, epoch)
             t_writer_1.add_scalar(f"SummaryLoss/train/surv", surv_losses_.avg, epoch)
@@ -262,7 +262,6 @@ def main(args):
 
             # Validate at the end of epoch every val step
             if (epoch + 1) % args.val == 0:
-                mode = "val"
                 validation_loss_1, validation_dice, validation_cindex = step(val_loader, model_1, criterian_val, metric, epoch, t_writer_1,
                                                           true_val_survival, sorted_val_event,
                                                           save_folder=args.save_folder_1,
@@ -272,7 +271,8 @@ def main(args):
                 t_writer_1.add_scalar(f"SummaryLoss", validation_loss_1, epoch)
                 t_writer_1.add_scalar(f"SummaryDice", validation_dice, epoch)
 
-                if validation_cindex > best_1:
+                if validation_cindex > best_1 or (epoch + 1) % 10 == 0:
+
                     print(f"Saving the model with DSC {validation_cindex}")
                     best_1 = validation_cindex
                     model_dict = model_1.state_dict()
@@ -282,8 +282,20 @@ def main(args):
                             state_dict=model_dict,
                             optimizer=optimizer.state_dict(),
                             scheduler=scheduler.state_dict(),
-                        ),
+                        ), is_best=True,
                         save_folder=args.save_folder_1, )
+                elif (epoch + 1) % 10 == 0:
+                    print(f"Saving the model per 10 epochs {validation_cindex}")
+                    model_dict = model_1.state_dict()
+                    save_checkpoint(
+                        dict(
+                            epoch=epoch,
+                            state_dict=model_dict,
+                            optimizer=optimizer.state_dict(),
+                            scheduler=scheduler.state_dict(),
+                        ), is_best=True,
+                        save_folder=args.save_folder_1, )
+
 
                 ts = time.perf_counter()
                 print(f"Val epoch done in {ts - te} s")
@@ -308,7 +320,7 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
     batch_per_epoch = len(data_loader)
     progress = ProgressMeter(
         batch_per_epoch,
-        [batch_time, data_time, losses],
+        [batch_time, data_time, losses, seg_losses, surv_losses],
         prefix=f"val Epoch: [{epoch}]")
 
     end = time.perf_counter()
@@ -392,7 +404,7 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
     writer.add_scalar(f"SummaryLoss/val/seg", seg_losses.avg, epoch)
     writer.add_scalar(f"SummaryLoss/val/surv", surv_losses.avg, epoch)
 
-
+    print("val Epoch"+"["+epoch+"]"+" c-index:"+cindex+"!")
     dice_values = dice_metric.aggregate().item()
     dice_metric.reset()
     dice_metric_batch.reset()

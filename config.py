@@ -1,10 +1,9 @@
 
 user = "YOU"
 BRATS_TRAIN_FOLDERS = "BRATS2021/Data/RSNA_ASNR_MICCAI_BraTS2021_TrainingData"
-NASOPHARYNX_FOLDERS = "F:\\Nasopharyn_Image\\train_data"
+NASOPHARYNX_FOLDERS = "F:\\Nasopharyn_Image\\show_train"
 # NASOPHARYNX_FOLDERS = "F:\\Nasopharyn_Image\\train"
 TEST_FOLDER = "test_data"
-
 
 def get_brats_folder(on="val"):
     if on == "train":

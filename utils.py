@@ -61,10 +61,15 @@ def master_do(func, *args, **kwargs):
         func(*args, **kwargs)
 
 
-def save_checkpoint(state: dict, save_folder: pathlib.Path):
+def save_checkpoint(state: dict, is_best, save_folder: pathlib.Path):
     """Save Training state."""
-    best_filename = f'{str(save_folder)}/model_best.pth.tar'
-    torch.save(state, best_filename)
+    if is_best:
+        best_filename = f'{str(save_folder)}/model_best.pth.tar'
+        torch.save(state, best_filename)
+
+    else:
+        ten_filename = f'{str(save_folder)}/model_per_10.pth.tar'
+        torch.save(state, ten_filename)
 
 
 class AverageMeter(object):
@@ -326,7 +331,7 @@ def generate_segmentations_monai(data_loader, model, writer_1, args):
 def cal_cindex(true_survival, pred_risks):
     true_surv = [a[2] for a in true_survival]
     pred_risks = pred_risks[0] / pred_risks
-
+    pred_risks = pred_risks.cpu().numpy()
     c_indx = concordance_index(true_surv, pred_risks)
     return c_indx
 
