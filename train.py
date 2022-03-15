@@ -16,10 +16,11 @@ from torch.utils.tensorboard import SummaryWriter
 from config import get_config
 from dataset.brats import get_sorted_true_surival_list, get_datasets, write_patient_csv
 from loss.loss import JointLoss
+from loss.survival import SurvivalLoss
 from utils import AverageMeter, ProgressMeter, save_checkpoint, reload_ckpt_bis, \
     count_parameters, save_metrics, save_args_1, inference, post_trans, dice_metric, \
     dice_metric_batch, cal_cindex
-from vtunet.vision_transformer import VTUNet as ViT_seg
+from net.vision_transformer import SWT_JSP
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.enabled = False
@@ -86,11 +87,11 @@ def main(args):
     config = get_config(args)
 
     if device == 'gpu':
-        model_1 = ViT_seg(config, num_classes=args.num_classes,
+        model_1 = SWT_JSP(config, num_classes=args.num_classes,
                       embed_dim=yaml_cfg.get("MODEL").get("SWIN").get("EMBED_DIM"),
                       win_size=yaml_cfg.get("MODEL").get("SWIN").get("WINDOW_SIZE")).cuda()
     else:
-        model_1 = ViT_seg(config, num_classes=args.num_classes,
+        model_1 = SWT_JSP(config, num_classes=args.num_classes,
                       embed_dim=yaml_cfg.get("MODEL").get("SWIN").get("EMBED_DIM"),
                       win_size=yaml_cfg.get("MODEL").get("SWIN").get("WINDOW_SIZE"))
 
@@ -116,14 +117,12 @@ def main(args):
         print(model_1, file=f)
 
     if device == 'gpu':
-        criterion = JointLoss(mode='train', device=device).cuda()
-        criterian_val = JointLoss(mode='val', device=device).cuda()
+        criterion = SurvivalLoss().cuda()
+        criterian_val = SurvivalLoss().cuda()
     else:
-        criterion = JointLoss(mode='train')
-        criterian_val = JointLoss(mode='val')
+        criterion = SurvivalLoss()
+        criterian_val = SurvivalLoss()
 
-    ediceLoss_Val = criterian_val.EDiceLoss_Val
-    metric = ediceLoss_Val.metric
     params = model_1.parameters()
 
     optimizer = torch.optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
@@ -178,14 +177,18 @@ def main(args):
             batch_time = AverageMeter('Time', ':6.3f')
             data_time = AverageMeter('Data', ':6.3f')
             losses_ = AverageMeter('Loss', ':.4e')
-            seg_losses_ = AverageMeter('SegLoss', ':.4e')
-            surv_losses_ = AverageMeter('SurvLoss', ':.4e')
 
             batch_per_epoch = len(train_loader)
             progress = ProgressMeter(
                 batch_per_epoch,
-                [batch_time, data_time, losses_, seg_losses_, surv_losses_],
+                [batch_time, data_time, losses_,],
                 prefix=f"train Epoch: [{epoch}]")
+
+
+            if device == 'gpu':
+                sorted_train_event = sorted_train_event.cuda()
+                sorted_val_event = sorted_val_event.cuda()
+
 
             end = time.perf_counter()
             metrics = []
@@ -196,16 +199,15 @@ def main(args):
                 # measure data loading time
                 data_time.update(time.perf_counter() - end)
 
-                inputs_S1, labels_S1 = batch[0]["image"].float(), batch[0]["label"].float()
+                inputs_S1, seg_S1 = batch[0]["image"].float(), batch[0]["label"].float()
 
-                inputs_S1, labels_S1, risk_sequence = Variable(inputs_S1), Variable(labels_S1), Variable(risk_sequence)
+                inputs_S1, risk_sequence = Variable(inputs_S1), Variable(risk_sequence)
                 if device == 'gpu':
-                    inputs_S1, labels_S1, risk_sequence = inputs_S1.cuda(), labels_S1.cuda(), risk_sequence.cuda()
+                    inputs_S1, risk_sequence = inputs_S1.cuda(), risk_sequence.cuda()
 
                 optimizer.zero_grad()
 
-                pred_dict, label_dict = dict(), dict()
-                segs_S1, risk = model_1(inputs_S1)
+                risk = model_1(inputs_S1, seg_S1)
 
                 #pack risk
                 for k, id in enumerate(batch[0]["patient_id"]):
@@ -215,14 +217,8 @@ def main(args):
                             break
 
 
-                if device == 'gpu':
-                    sorted_train_event = sorted_train_event.cuda()
-                    sorted_val_event = sorted_val_event.cuda()
 
-                pred_dict['seg'], pred_dict['surv'] = segs_S1, risk_sequence
-                label_dict['seg'], label_dict['surv'] = labels_S1, sorted_train_event
-
-                loss_, seg_loss_, surv_loss_ = criterion(pred_dict, label_dict)
+                loss_ = criterion(risk_sequence, sorted_train_event)
 
                 t_writer_1.add_scalar(f"Loss/train{''}",
                                       loss_.item(),
@@ -231,8 +227,6 @@ def main(args):
                 # measure accuracy and record loss_
                 if not np.isnan(loss_.item()):
                     losses_.update(loss_.item())
-                    seg_losses_.update(loss_.item())
-                    surv_losses_.update(loss_.item())
                 else:
                     print("NaN in model loss!!")
 
@@ -253,8 +247,6 @@ def main(args):
                 progress.display(i)
 
             t_writer_1.add_scalar(f"SummaryLoss/train/joint", losses_.avg, epoch)
-            t_writer_1.add_scalar(f"SummaryLoss/train/seg", seg_losses_.avg, epoch)
-            t_writer_1.add_scalar(f"SummaryLoss/train/surv", surv_losses_.avg, epoch)
 
             te = time.perf_counter()
             print(f"Train Epoch done in {te - ts} s")
@@ -262,16 +254,15 @@ def main(args):
 
             # Validate at the end of epoch every val step
             if (epoch + 1) % args.val == 0:
-                validation_loss_1, validation_dice, validation_cindex = step(val_loader, model_1, criterian_val, metric, epoch, t_writer_1,
+                validation_loss_1, validation_cindex = step(val_loader, model_1, criterian_val, epoch, t_writer_1,
                                                           true_val_survival, sorted_val_event,
                                                           save_folder=args.save_folder_1,
                                                           patients_perf=patients_perf)
 
                 t_writer_1.add_scalar(f"SummaryCIndex{''}", validation_cindex, epoch)
                 t_writer_1.add_scalar(f"SummaryLoss", validation_loss_1, epoch)
-                t_writer_1.add_scalar(f"SummaryDice", validation_dice, epoch)
 
-                if validation_cindex > best_1 or (epoch + 1) % 10 == 0:
+                if validation_cindex > best_1:
 
                     print(f"Saving the model with DSC {validation_cindex}")
                     best_1 = validation_cindex
@@ -284,18 +275,6 @@ def main(args):
                             scheduler=scheduler.state_dict(),
                         ), is_best=True,
                         save_folder=args.save_folder_1, )
-                elif (epoch + 1) % 10 == 0:
-                    print(f"Saving the model per 10 epochs {validation_cindex}")
-                    model_dict = model_1.state_dict()
-                    save_checkpoint(
-                        dict(
-                            epoch=epoch,
-                            state_dict=model_dict,
-                            optimizer=optimizer.state_dict(),
-                            scheduler=scheduler.state_dict(),
-                        ), is_best=True,
-                        save_folder=args.save_folder_1, )
-
 
                 ts = time.perf_counter()
                 print(f"Val epoch done in {ts - te} s")
@@ -305,7 +284,7 @@ def main(args):
             print("Stopping training loop, doing benchmark")
 
 
-def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival, sorted_val_event,  save_folder=None, patients_perf=None):
+def step(data_loader, model, criterion, epoch, writer, true_val_survival, sorted_val_event,  save_folder=None, patients_perf=None):
     risk_sequence = torch.linspace(1, 0, len(true_val_survival))
     if device == 'gpu':
         risk_sequence = risk_sequence.cuda()
@@ -314,13 +293,11 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    seg_losses = AverageMeter('SegLoss', ':.4e')
-    surv_losses = AverageMeter('SurvLoss', ':.4e')
 
     batch_per_epoch = len(data_loader)
     progress = ProgressMeter(
         batch_per_epoch,
-        [batch_time, data_time, losses, seg_losses, surv_losses],
+        [batch_time, data_time, losses],
         prefix=f"val Epoch: [{epoch}]")
 
     end = time.perf_counter()
@@ -337,35 +314,26 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
         model.eval()
         with torch.no_grad():
             if device == 'gpu':
-                val_inputs, val_labels = (
+                val_inputs, val_segs = (
                     val_data["image"].cuda(),
                     val_data["label"].cuda(),
                 )
             else:
-                val_inputs, val_labels = (
+                val_inputs, val_segs = (
                     val_data["image"],
                     val_data["label"],
                 )
             if device == 'cpu':
                 val_inputs = val_inputs.float()
 
-            val_seg, val_risk = model(val_inputs)
-            val_seg_1 = [post_trans(i) for i in decollate_batch(val_seg)]
+            val_risk = model(val_inputs, val_segs)
 
             # pack risk
             for j, t in enumerate(true_val_survival):
                 if patient_id == t[0]:
                     risk_sequence[j] = val_risk
 
-            segs = val_seg
-            targets = val_labels
-
-            pred_dict, label_dict = dict(), dict()
-            pred_dict['seg'], pred_dict['surv'] = val_seg, risk_sequence
-            label_dict['seg'], label_dict['surv'] = val_labels, sorted_val_event
-
-            loss_, seg_loss_, surv_loss_ = criterion(pred_dict, label_dict)
-            dice_metric(y_pred=val_seg_1, y=val_labels)
+            loss_ = criterion(risk_sequence, sorted_val_event)
 
         if patients_perf is not None:
             patients_perf.append(
@@ -380,17 +348,8 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
         # measure accuracy and record loss_
         if not np.isnan(loss_.item()):
             losses.update(loss_.item())
-            seg_losses.update(seg_loss_.item())
-            surv_losses.update(surv_loss_.item())
         else:
             print("NaN in model loss!!")
-
-
-
-
-        metric_ = metric(segs, targets)
-        metrics.extend(metric_)
-
         # measure elapsed time
         batch_time.update(time.perf_counter() - end)
         end = time.perf_counter()
@@ -398,18 +357,12 @@ def step(data_loader, model, criterion, metric, epoch, writer, true_val_survival
         progress.display(i)
 
     cindex = cal_cindex(true_val_survival, risk_sequence)
-    save_metrics(epoch, metrics, writer, epoch, False, save_folder)
 
-    writer.add_scalar(f"SummaryLoss/val/joint", losses.avg, epoch)
-    writer.add_scalar(f"SummaryLoss/val/seg", seg_losses.avg, epoch)
-    writer.add_scalar(f"SummaryLoss/val/surv", surv_losses.avg, epoch)
+    writer.add_scalar(f"SummaryLoss/val/loss", losses.avg, epoch)
 
-    print("val Epoch"+"["+epoch+"]"+" c-index:"+cindex+"!")
-    dice_values = dice_metric.aggregate().item()
-    dice_metric.reset()
-    dice_metric_batch.reset()
+    print("val Epoch"+"["+str(epoch)+"]"+" c-index:"+str(cindex)+"!")
 
-    return losses.avg, dice_values, cindex
+    return losses.avg, cindex
 
 
 if __name__ == '__main__':

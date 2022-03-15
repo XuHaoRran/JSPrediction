@@ -8,7 +8,7 @@ import os
 import shutil
 #将数据集转换成vtunet的格式,有缺失的先不做，其他直接做
 from_path="F:\\Nasopharyn_Image\\Image_Data_or1\\center3"
-save_path="F:\\Nasopharyn_Image\\train_data"
+save_path="F:\\Nasopharyn_Image\\train_data_tumor_node_240_240_155"
 not_finished_list = "F:\\Nasopharyn_Image\\data_information\\not_finished_list.csv"
 
 pool = ThreadPoolExecutor(max_workers=16)

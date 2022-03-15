@@ -956,7 +956,6 @@ class SwinTransformerSys3D(nn.Module):
                  num_classes=1,
                  embed_dim=96,
                  depths=[2, 2, 2, 1],
-                 depths_decoder=[1, 2, 2, 2],
                  num_heads=[3, 6, 12, 24],
                  window_size=(7, 7, 7),
                  mlp_ratio=4.,
@@ -969,13 +968,14 @@ class SwinTransformerSys3D(nn.Module):
                  patch_norm=True,
                  use_checkpoint=False,
                  frozen_stages=-1,
-                 final_upsample="expand_first", **kwargs):
+                  **kwargs):
 
         super(SwinTransformerSys3D, self).__init__()
         # print(
         #     "SwinTransformerSys3D expand initial----depths:{};depths_decoder:{};drop_path_rate:{};num_classes:{};embed_dims:{};window:{}".format(
         #         depths,
         #         depths_decoder, drop_path_rate, num_classes, embed_dim, window_size))
+
 
         self.pretrained = pretrained
         self.pretrained2d = pretrained2d
@@ -984,11 +984,33 @@ class SwinTransformerSys3D(nn.Module):
         self.embed_dim = embed_dim
         self.patch_norm = patch_norm
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
-        self.num_features_up = int(embed_dim * 2)
         self.mlp_ratio = mlp_ratio
-        self.final_upsample = final_upsample
         self.frozen_stages = frozen_stages
+        self.norm = norm_layer(self.num_features)
 
+        self.sub_concat_block_depths = [2, 2]
+        self.sub_concat_block_nums = len(self.sub_concat_block_depths)
+
+        self.sub_seg = SubFeatureNet(pretrained=None,
+                 pretrained2d=pretrained2d,
+                 img_size=img_size,
+                 patch_size=patch_size,
+                 in_chans=in_chans,
+                 num_classes=num_classes,
+                 embed_dim=embed_dim,
+                 depths=self.sub_concat_block_depths,
+                 num_heads=num_heads,
+                 window_size=window_size,
+                 mlp_ratio=mlp_ratio,
+                 qkv_bias=qkv_bias,
+                 qk_scale=qk_scale,
+                 drop_rate=drop_rate,
+                 attn_drop_rate=attn_drop_rate,
+                 drop_path_rate=drop_path_rate,
+                 norm_layer=norm_layer,
+                 patch_norm=patch_norm,
+                 use_checkpoint=use_checkpoint,
+                 frozen_stages=-1)
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed3D(img_size=img_size,
                                         patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
@@ -999,12 +1021,15 @@ class SwinTransformerSys3D(nn.Module):
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
+
+
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
         # build encoder and bottleneck layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
+
             layer = BasicLayer(
                 dim=int(embed_dim * 2 ** i_layer),
                 depth=depths[i_layer],
@@ -1023,70 +1048,13 @@ class SwinTransformerSys3D(nn.Module):
                 use_checkpoint=use_checkpoint)
             self.layers.append(layer)
 
-        # build decoder layers
-        self.layers_up = nn.ModuleList()
         self.concat_back_dim = nn.ModuleList()
         for i_layer in range(self.num_layers):
-            concat_linear = nn.Linear(2 * int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)),
-                                      int(embed_dim * 2 ** (
-                                              self.num_layers - 1 - i_layer)),
-                                      bias=False) if i_layer > 0 else nn.Identity()
-            if i_layer == 0:
-                layer_up = PatchExpand(
-                    input_resolution=(patches_resolution[0] // (2 ** (self.num_layers - 1 - i_layer)),
-                                      patches_resolution[1] // (2 ** (self.num_layers - 1 - i_layer)),
-                                      patches_resolution[2] // (2 ** (self.num_layers - 1 - i_layer))),
-                    dim=int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)), dim_scale=2, norm_layer=norm_layer)
-            else:
-                layer_up = BasicLayer_up(
-                    dim=int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)),
-                    input_resolution=(patches_resolution[0] // (2 ** (self.num_layers - 1 - i_layer)),
-                                      patches_resolution[1] // (2 ** (self.num_layers - 1 - i_layer)),
-                                      patches_resolution[2] // (2 ** (self.num_layers - 1 - i_layer))),
-                    depth=depths[(self.num_layers - 1 - i_layer)],
-                    num_heads=num_heads[(self.num_layers - 1 - i_layer)],
-                    window_size=window_size,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    qk_scale=qk_scale,
-                    drop=drop_rate,
-                    attn_drop=attn_drop_rate,
-                    drop_path=dpr[sum(depths[:(self.num_layers - 1 - i_layer)]):sum(
-                        depths[:(self.num_layers - 1 - i_layer) + 1])],
-                    norm_layer=norm_layer,
-                    upsample=PatchExpand if (i_layer < self.num_layers - 1) else None,
-                    use_checkpoint=use_checkpoint)
-
-            self.layers_up.append(layer_up)
+            concat_linear = nn.Linear(2 * int(embed_dim * 2 ** i_layer),
+                                      int(embed_dim * 2 ** i_layer),
+                                      bias=False)
             self.concat_back_dim.append(concat_linear)
 
-        self.norm = norm_layer(self.num_features)
-        self.norm_up = norm_layer(self.embed_dim)
-
-        if self.final_upsample == "expand_first":
-            # print("---final upsample expand_first---")
-            self.up = FinalPatchExpand_X4(input_resolution=(
-                img_size[0] // patch_size[0], img_size[1] // patch_size[1], img_size[2] // patch_size[2]),
-                dim_scale=4, dim=embed_dim)
-            self.output = nn.Conv3d(in_channels=embed_dim, out_channels=self.num_classes, kernel_size=1, bias=False)
-
-        self.seg_feature_network = SegFeatureNetwork3D(
-            img_size=img_size,
-            patch_size=patch_size,
-            in_chans=in_chans,
-            embed_dim=embed_dim,
-            depths=depths,
-            num_heads=num_heads,
-            window_size=window_size,
-            mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop_rate=drop_rate,
-            attn_drop_rate=attn_drop_rate,
-            drop_path_rate=drop_path_rate,
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint
-        )
 
         self.joint_pred_output = JointPredictionHead(dim= embed_dim * 2 ** (len(depths) - 1))
 
@@ -1101,32 +1069,28 @@ class SwinTransformerSys3D(nn.Module):
         return {'relative_position_bias_table'}
 
     # Encoder and Bottleneck
-    def forward_features(self, x):
+    def forward_features(self, x, sub_x):
         x = self.patch_embed(x)
         x = self.pos_drop(x)
-        x_downsample = []
-        v_values_1 = []
-        k_values_1 = []
-        q_values_1 = []
-        v_values_2 = []
-        k_values_2 = []
-        q_values_2 = []
-
         for i, layer in enumerate(self.layers):
-            x_downsample.append(x)
-            x, v1, k1, q1, v2, k2, q2 = layer(x, i)
-            v_values_1.append(v1)
-            k_values_1.append(k1)
-            q_values_1.append(q1)
-            v_values_2.append(v2)
-            k_values_2.append(k2)
-            q_values_2.append(q2)
+            B, C, D, H, W = x.shape
+
+            if i < len(sub_x):
+                x = torch.cat([x, sub_x[i]], 1)
+                x = x.flatten(2).transpose(1, 2)
+
+                x = self.concat_back_dim[i](x)
+
+                x = x.transpose(1, 2)
+                x = x.view(B, C, D, H, W)
+
+            x, _, _, _, _, _, _ = layer(x, i)
 
         x = rearrange(x, 'n c d h w -> n d h w c')
         x = self.norm(x)
         x = rearrange(x, 'n d h w c -> n c d h w')
 
-        return x, x_downsample, v_values_1, k_values_1, q_values_1, v_values_2, k_values_2, q_values_2
+        return x
 
     # Dencoder and Skip connection
     def forward_up_features(self, x, x_downsample, v_values_1, k_values_1, q_values_1, v_values_2, k_values_2,
@@ -1275,91 +1239,131 @@ class SwinTransformerSys3D(nn.Module):
         x = self.seg_feature_network(x, x_downsample)
         return x
 
-    def forward(self, x):
+    def forward(self, x, seg_mask):
         input = x
-        x0, x_downsample, v_values_1, k_values_1, q_values_1, v_values_2, k_values_2, q_values_2 = self.forward_features(
-            x)
 
-        x1 = self.forward_up_features(x0, x_downsample, v_values_1, k_values_1, q_values_1, v_values_2, k_values_2,
-                                     q_values_2)
-        # Segementation output.
-        seg_mask = self.up_x4(x1)
         seg_value = get_seg_value(input, seg_mask)
 
-        x2 = self.forward_segs_features(seg_value, x_downsample)
+        sub_x, sub_downsample, _, _, _, _, _, _ = self.sub_seg(seg_value)
+        sub_x = [*sub_downsample , sub_x]
+        #seg_value、x前二分别提取，混入x。
+        x  = self.forward_features(
+            x, sub_x)
+
+        # x2 = self.forward_segs_features(seg_value, x_downsample)
 
         # Predict DMFS.
-        x2 = self.joint_pred_output(x2)
+        x = self.joint_pred_output(x)
 
-        return seg_mask, x2
+        return x
+
+
+
+
+class SubFeatureNet(nn.Module):
+    def __init__(self, pretrained=None,
+                 pretrained2d=True,
+                 img_size=(128, 128, 128),
+                 patch_size=(4, 4, 4),
+                 in_chans=3,
+                 num_classes=1,
+                 embed_dim=96,
+                 depths=[2, 2],
+                 num_heads=[3, 6, 12, 24],
+                 window_size=(7, 7, 7),
+                 mlp_ratio=4.,
+                 qkv_bias=True,
+                 qk_scale=None,
+                 drop_rate=0.,
+                 attn_drop_rate=0.,
+                 drop_path_rate=0.1,
+                 norm_layer=nn.LayerNorm,
+                 patch_norm=True,
+                 use_checkpoint=False,
+                 frozen_stages=-1,
+                 **kwargs):
+        super().__init__()
+        #Only use the frist two layers of swin transformer to joint seg_value and the origin x_input.
+        self.pretrained = pretrained
+        self.pretrained2d = pretrained2d
+        self.num_classes = num_classes
+        self.num_layers = len(depths)
+        self.embed_dim = embed_dim
+        self.patch_norm = patch_norm
+        self.num_features = int(embed_dim * 2 ** (self.num_layers))
+        self.mlp_ratio = mlp_ratio
+        self.frozen_stages = frozen_stages
+
+        # split image into non-overlapping patches
+        self.patch_embed = PatchEmbed3D(img_size=img_size,
+                                        patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+                                        norm_layer=norm_layer if self.patch_norm else None)
+
+        patches_resolution = self.patch_embed.patches_resolution
+        self.patches_resolution = patches_resolution
+        self.norm = norm_layer(self.num_features)
+
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        # stochastic depth
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+
+        self.layers = nn.ModuleList()
+        for i_layer in range(self.num_layers):
+            layer = BasicLayer(
+                dim=int(embed_dim * 2 ** i_layer),
+                depth=depths[i_layer],
+                depths=depths,
+                num_heads=num_heads[i_layer],
+                window_size=window_size,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                drop=drop_rate,
+                attn_drop=attn_drop_rate,
+                drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
+                drop_path_rate=drop_path_rate,
+                norm_layer=norm_layer,
+                downsample=PatchMerging if i_layer < self.num_layers else None,
+                use_checkpoint=use_checkpoint)
+            self.layers.append(layer)
+        # Encoder and Bottleneck
+
+    def forward(self, x):
+        x = self.patch_embed(x)
+        x = self.pos_drop(x)
+        x_downsample = []
+        v_values_1 = []
+        k_values_1 = []
+        q_values_1 = []
+        v_values_2 = []
+        k_values_2 = []
+        q_values_2 = []
+
+        for i, layer in enumerate(self.layers):
+            x_downsample.append(x)
+            x, v1, k1, q1, v2, k2, q2 = layer(x, i)
+            v_values_1.append(v1)
+            k_values_1.append(k1)
+            q_values_1.append(q1)
+            v_values_2.append(v2)
+            k_values_2.append(k2)
+            q_values_2.append(q2)
+
+        x = rearrange(x, 'n c d h w -> n d h w c')
+        x = self.norm(x)
+        x = rearrange(x, 'n d h w c -> n c d h w')
+
+        return x, x_downsample, v_values_1, k_values_1, q_values_1, v_values_2, k_values_2, q_values_2
+
 
 
 if __name__ == '__main__':
-    # x = torch.zeros((1,3,128,128,128))
-    # model = SwinTransformerSys3D(embed_dim=48)
-    # x = model(x)
-    # print(x.shape)
-
-    val = torch.full([2,3,3,3], 2)
-
-    aaa = torch.as_tensor(
-        [
-            [
-                [
-                    [1, 1, 0],
-                    [0, 0, 0],
-                    [0, 0, 0],
-                ],
-                [
-                    [0, 0, 1],
-                    [0, 0, 0],
-                    [0, 0, 0],
-                ],
-            ],
-            [
-                [
-                    [0, 0, 0],
-                    [0, 0, 1],
-                    [0, 0, 1],
-                ],
-                [
-                    [0, 0, 0],
-                    [0, 0, 0],
-                    [0, 1, 0],
-                ],
-            ]
-        ]
-
-    )
-    print(aaa.shape)
-    bbb = aaa.sum(axis=1)
-    print(bbb)
-    print(bbb.shape)
-
-    bbb = torch.unsqueeze(bbb, 1)
-    print(bbb.shape)
-    print(bbb)
-    bbb = bbb.repeat(1, 3, 1,1)
-    print(bbb.shape)
-    print(bbb)
-
-    ccc = val * bbb
-    print(ccc)
-    print(ccc.shape)
-
-    print("*" * 100)
-    seg_mask = torch.zeros((2, 2, 128, 128, 128))
-    img_value = torch.zeros((2, 3, 128, 128, 128))
-    B, C, D, W, H = img_value.shape
-
-    # x = torch.zeros((2,3,128,128,128))
-    seg_mask = seg_mask.sum(axis=1)
-    seg_mask = torch.unsqueeze(seg_mask, 1)
-    seg_mask = seg_mask.repeat(1, C, 1, 1, 1)
-    seg_value = seg_mask * img_value
-    print(seg_value.shape)
-
-
+    x = torch.zeros((1,3,128,128,128))
+    y = torch.zeros((1,3,128,128,128))
+    model = SwinTransformerSys3D(embed_dim=48)
+    x = model(x, y)
+    print(x.shape)
 
 
 

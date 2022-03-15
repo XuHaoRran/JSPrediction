@@ -33,7 +33,7 @@ class JointLoss(nn.Module):
         seg_loss = self.SegLoss(seg_p, seg_l)
         surv_loss = self.SurvLoss(surv_p, surv_l)
 
-        joint_loss = seg_loss + surv_loss
+        joint_loss = surv_loss
 
         # joint_loss = self.SegLoss(seg_p, seg_l) + self.SurvLoss(surv_p, surv_l) + self.ClsLoss(cls_p, cls_l)
 

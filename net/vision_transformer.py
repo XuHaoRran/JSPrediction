@@ -9,14 +9,14 @@ import logging
 import torch
 import torch.nn as nn
 
-from .vt_unet import SwinTransformerSys3D
+from .jsp_net import SwinTransformerSys3D
 
 logger = logging.getLogger(__name__)
 
 
-class VTUNet(nn.Module):
+class SWT_JSP(nn.Module):
     def __init__(self, config, num_classes=1, zero_head=False, embed_dim=96, win_size=7):
-        super(VTUNet, self).__init__()
+        super(SWT_JSP, self).__init__()
         self.num_classes = num_classes
         self.zero_head = zero_head
         self.config = config
@@ -24,7 +24,7 @@ class VTUNet(nn.Module):
         self.win_size = win_size
         self.win_size = (self.win_size,self.win_size,self.win_size)
 
-        self.swin_unet = SwinTransformerSys3D(img_size=(128, 128, 128),
+        self.swtjsp_net = SwinTransformerSys3D(img_size=(128, 128, 128),
                                             patch_size=(4, 4, 4),
                                             in_chans=3,
                                             num_classes=self.num_classes,
@@ -42,11 +42,10 @@ class VTUNet(nn.Module):
                                             norm_layer=nn.LayerNorm,
                                             patch_norm=True,
                                             use_checkpoint=False,
-                                            frozen_stages=-1,
-                                            final_upsample="expand_first")
+                                            frozen_stages=-1)
 
-    def forward(self, x):
-        logits = self.swin_unet(x)
+    def forward(self, x, sub_x):
+        logits = self.swtjsp_net(x, sub_x)
         return logits
 
     def load_from(self, config):
@@ -68,7 +67,7 @@ class VTUNet(nn.Module):
             pretrained_dict = pretrained_dict['model']
             print("---start load pretrained modle of swin encoder---")
 
-            model_dict = self.swin_unet.state_dict()
+            model_dict = self.swtjsp_net.state_dict()
             full_dict = copy.deepcopy(pretrained_dict)
             for k, v in pretrained_dict.items():
                 if "layers." in k:
@@ -81,6 +80,6 @@ class VTUNet(nn.Module):
                         print("delete:{};shape pretrain:{};shape model:{}".format(k, v.shape, model_dict[k].shape))
                         del full_dict[k]
 
-            self.swin_unet.load_state_dict(full_dict, strict=False)
+            self.swtjsp_net.load_state_dict(full_dict, strict=False)
         else:
             print("none pretrain")
