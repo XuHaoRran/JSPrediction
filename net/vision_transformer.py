@@ -2,7 +2,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from collections import OrderedDict
 import copy
 import logging
 
@@ -54,32 +54,22 @@ class SWT_JSP(nn.Module):
             print("pretrained_path:{}".format(pretrained_path))
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             pretrained_dict = torch.load(pretrained_path, map_location=device)
-            if "model" not in pretrained_dict:
-                print("---start load pretrained modle by splitting---")
-                pretrained_dict = {k[17:]: v for k, v in pretrained_dict.items()}
-                for k in list(pretrained_dict.keys()):
-                    if "output" in k:
-                        print("delete key:{}".format(k))
-                        del pretrained_dict[k]
-                self.swin_unet.load_state_dict(pretrained_dict, strict=False)
-
-                return
-            pretrained_dict = pretrained_dict['model']
-            print("---start load pretrained modle of swin encoder---")
-
             model_dict = self.swtjsp_net.state_dict()
-            full_dict = copy.deepcopy(pretrained_dict)
+            pretrained_dict = pretrained_dict['state_dict']
+            temp_pretrained_dict = OrderedDict()
             for k, v in pretrained_dict.items():
-                if "layers." in k:
-                    current_layer_num = 3 - int(k[7:8])
-                    current_k = "layers_up." + str(current_layer_num) + k[8:]
-                    full_dict.update({current_k: v})
-            for k in list(full_dict.keys()):
-                if k in model_dict:
-                    if full_dict[k].shape != model_dict[k].shape:
-                        print("delete:{};shape pretrain:{};shape model:{}".format(k, v.shape, model_dict[k].shape))
-                        del full_dict[k]
-
-            self.swtjsp_net.load_state_dict(full_dict, strict=False)
+                if 'swin_unet.' in k:
+                    k = k.split('swin_unet.')[1]
+                temp_pretrained_dict[k] = v
+            del pretrained_dict
+            temp_model_dict = OrderedDict()
+            for k,v in temp_pretrained_dict.items():
+                for m in model_dict.keys():
+                    if k in m and v.shape == model_dict[m].shape:
+                        temp_model_dict[m] = v
+            model_dict.update(temp_model_dict)
+            self.swtjsp_net.load_state_dict(model_dict, strict=False)
         else:
             print("none pretrain")
+
+

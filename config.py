@@ -1,7 +1,7 @@
 
 user = "YOU"
 BRATS_TRAIN_FOLDERS = "BRATS2021/Data/RSNA_ASNR_MICCAI_BraTS2021_TrainingData"
-NASOPHARYNX_FOLDERS = "F:\\Nasopharyn_Image\\show_train"
+NASOPHARYNX_FOLDERS = "C:\\Users\\xuhaoran\\Desktop\\medical_project\\train_data_tumor_node_240_240_155"
 # NASOPHARYNX_FOLDERS = "F:\\Nasopharyn_Image\\train"
 TEST_FOLDER = "test_data"
 
@@ -63,9 +63,9 @@ _C.MODEL = CN()
 # Model type
 _C.MODEL.TYPE = 'swin'
 # Model name
-_C.MODEL.NAME = 'swin_tiny_patch4_window7_224'
+_C.MODEL.NAME = 'pretrain_seg_model.pth'
 # Checkpoint to resume, could be overwritten by command line argument
-_C.MODEL.PRETRAIN_CKPT = './pretrained_ckpt/swin_tiny_patch4_window7_224.pth'
+_C.MODEL.PRETRAIN_CKPT = './pretrained_ckpt/pretrain_seg_model.pth.tar'
 _C.MODEL.RESUME = ''
 # Number of classes, overwritten in data preparation
 _C.MODEL.NUM_CLASSES = 1000

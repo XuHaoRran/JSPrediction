@@ -18,23 +18,22 @@ from dataset.brats import get_sorted_true_surival_list, get_datasets, write_pati
 from loss.loss import JointLoss
 from loss.survival import SurvivalLoss
 from utils import AverageMeter, ProgressMeter, save_checkpoint, reload_ckpt_bis, \
-    count_parameters, save_metrics, save_args_1, inference, post_trans, dice_metric, \
-    dice_metric_batch, cal_cindex
+    count_parameters, save_args_1,  cal_cindex
 from net.vision_transformer import SWT_JSP
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.enabled = False
-device = 'cpu'
+device = 'gpu'
 if device == 'gpu':
     torch.cuda.set_device(0)
 
 parser = argparse.ArgumentParser(description='VTUNET BRATS 2021 Training')
 # DO not use data_aug argument this argument!!
-parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
                     help='number of data loading workers (default: 2).')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
 parser.add_argument('--epochs', default=300, type=int, metavar='N', help='number of total epochs to run')
-parser.add_argument('-b', '--batch-size', default=1, type=int, metavar='N', help='mini-batch size (default: 1)')
+parser.add_argument('-b', '--batch-size', default=4, type=int, metavar='N', help='mini-batch size (default: 1)')
 parser.add_argument('--lr', '--learning-rate', default=1e-4, type=float, metavar='LR', help='initial learning rate',
                     dest='lr')
 parser.add_argument('--wd', '--weight-decay', default=0, type=float,
@@ -47,7 +46,7 @@ parser.add_argument('--num_classes', type=int,
                     default=2, help='output channel of network')
 parser.add_argument('--seed', type=int,
                     default=1234, help='random seed')
-parser.add_argument('--cfg', type=str, default="configs/vt_unet_tiny.yaml", metavar="FILE",
+parser.add_argument('--cfg', type=str, default="configs/vt_unet_base.yaml", metavar="FILE",
                     help='path to config file', )
 parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
 parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
@@ -131,7 +130,7 @@ def main(args):
     #     full_train_dataset, l_val_dataset, bench_dataset = get_datasets(args.seed, fold_number=args.fold)
     train_loader = torch.utils.data.DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True,
                                                num_workers=args.workers, pin_memory=True, drop_last=True)
-    val_loader = torch.utils.data.DataLoader(l_val_dataset, batch_size=1, shuffle=False,
+    val_loader = torch.utils.data.DataLoader(l_val_dataset, batch_size=args.batch_size, shuffle=False,
                                              pin_memory=True, num_workers=args.workers)
     # bench_loader = torch.utils.data.DataLoader(bench_dataset, batch_size=1, num_workers=args.workers)
 
@@ -201,9 +200,9 @@ def main(args):
 
                 inputs_S1, seg_S1 = batch[0]["image"].float(), batch[0]["label"].float()
 
-                inputs_S1, risk_sequence = Variable(inputs_S1), Variable(risk_sequence)
+                inputs_S1, seg_S1, risk_sequence = Variable(inputs_S1), Variable(seg_S1), Variable(risk_sequence)
                 if device == 'gpu':
-                    inputs_S1, risk_sequence = inputs_S1.cuda(), risk_sequence.cuda()
+                    inputs_S1, seg_S1, risk_sequence = inputs_S1.cuda(), seg_S1.cuda(), risk_sequence.cuda()
 
                 optimizer.zero_grad()
 
@@ -215,6 +214,7 @@ def main(args):
                         if id == t[0]:
                             risk_sequence[j] = risk[k]
                             break
+
 
 
 
@@ -231,7 +231,7 @@ def main(args):
                     print("NaN in model loss!!")
 
                 # compute gradient and do SGD step
-                loss_.mean().backward()
+                loss_.backward()
                 optimizer.step()
                 # t_writer_1.add_graph(model_1, inputs_S1)
 
@@ -275,6 +275,18 @@ def main(args):
                             scheduler=scheduler.state_dict(),
                         ), is_best=True,
                         save_folder=args.save_folder_1, )
+                if (epoch + 1) % args.val == 10:
+                    print(f"Saving the model every 10 epochs with c-index{validation_cindex}!")
+                    best_1 = validation_cindex
+                    model_dict = model_1.state_dict()
+                    save_checkpoint(
+                        dict(
+                            epoch=epoch,
+                            state_dict=model_dict,
+                            optimizer=optimizer.state_dict(),
+                            scheduler=scheduler.state_dict(),
+                        ), is_best=False, epoch_=epoch+1, cindex_=validation_cindex,
+                        save_folder=args.save_folder_1, )
 
                 ts = time.perf_counter()
                 print(f"Val epoch done in {ts - te} s")
@@ -303,42 +315,47 @@ def step(data_loader, model, criterion, epoch, writer, true_val_survival, sorted
     end = time.perf_counter()
     metrics = []
 
-    for i, val_data in enumerate(data_loader):
-
+    # for i, val_data in enumerate(data_loader):
+    for i, batch in enumerate(zip(data_loader)):
 
         # measure data loading time
         data_time.update(time.perf_counter() - end)
 
-        patient_id = val_data["patient_id"]
+        patient_ids = batch[0]["patient_id"]
+
+        val_inputs, val_segs = batch[0]["image"].float(), batch[0]["label"].float()
+
+        if device == 'gpu':
+            val_inputs, val_segs, risk_sequence = val_inputs.cuda(), val_segs.cuda(), risk_sequence.cuda()
 
         model.eval()
         with torch.no_grad():
             if device == 'gpu':
                 val_inputs, val_segs = (
-                    val_data["image"].cuda(),
-                    val_data["label"].cuda(),
+                    val_inputs.cuda(),
+                    val_segs.cuda(),
                 )
-            else:
-                val_inputs, val_segs = (
-                    val_data["image"],
-                    val_data["label"],
-                )
-            if device == 'cpu':
-                val_inputs = val_inputs.float()
+
+            val_inputs = val_inputs.float()
 
             val_risk = model(val_inputs, val_segs)
 
             # pack risk
-            for j, t in enumerate(true_val_survival):
-                if patient_id == t[0]:
-                    risk_sequence[j] = val_risk
+            for k, id in enumerate(patient_ids):
+                for j, t in enumerate(true_val_survival):
+                    if id == t[0]:
+                        risk_sequence[j] = val_risk[k]
+                        break
+
+
 
             loss_ = criterion(risk_sequence, sorted_val_event)
 
         if patients_perf is not None:
-            patients_perf.append(
-                dict(id=patient_id[0], epoch=epoch, split='val', loss=loss_.item())
-            )
+            for k in range(len(patient_ids)):
+                patients_perf.append(
+                    dict(id=patient_ids[k], epoch=epoch, split='val', loss=loss_.item())
+                )
 
         writer.add_scalar(f"Loss/val{''}",
                           loss_.item(),

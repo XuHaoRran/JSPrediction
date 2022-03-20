@@ -329,6 +329,8 @@ class SwinTransformerBlock3D(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
+
+
     def forward_part1(self, x, mask_matrix, prev_v, prev_k, prev_q, is_decoder):
         B, D, H, W, C = x.shape
         window_size, shift_size = get_window_size((D, H, W), self.window_size, self.shift_size)
@@ -1058,6 +1060,8 @@ class SwinTransformerSys3D(nn.Module):
 
         self.joint_pred_output = JointPredictionHead(dim= embed_dim * 2 ** (len(depths) - 1))
 
+        self.init_weights()
+
         self._freeze_stages()
 
     @torch.jit.ignore
@@ -1216,24 +1220,7 @@ class SwinTransformerSys3D(nn.Module):
             elif isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.bias, 0)
                 nn.init.constant_(m.weight, 1.0)
-
-        if pretrained:
-            self.pretrained = pretrained
-        if isinstance(self.pretrained, str):
             self.apply(_init_weights)
-
-            print(f'load model from: {self.pretrained}')
-
-            if self.pretrained2d:
-                # Inflate 2D model into 3D model.
-                self.inflate_weights()
-            else:
-                # Directly load 3D model.
-                load_checkpoint(self, self.pretrained, strict=False)
-        elif self.pretrained is None:
-            self.apply(_init_weights)
-        else:
-            raise TypeError('pretrained must be a str or None')
 
     def forward_segs_features(self, x, x_downsample):
         x = self.seg_feature_network(x, x_downsample)

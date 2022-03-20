@@ -61,14 +61,14 @@ def master_do(func, *args, **kwargs):
         func(*args, **kwargs)
 
 
-def save_checkpoint(state: dict, is_best, save_folder: pathlib.Path):
+def save_checkpoint(state: dict, is_best, save_folder: pathlib.Path, epoch_=0, cindex_=0):
     """Save Training state."""
     if is_best:
         best_filename = f'{str(save_folder)}/model_best.pth.tar'
         torch.save(state, best_filename)
-
     else:
-        ten_filename = f'{str(save_folder)}/model_per_10.pth.tar'
+        cindex_ = round(cindex_, 2)
+        ten_filename = f'{str(save_folder)}/model_{str(epoch_)}_{str(cindex_)}.pth.tar'
         torch.save(state, ten_filename)
 
 
@@ -330,9 +330,10 @@ def generate_segmentations_monai(data_loader, model, writer_1, args):
 
 def cal_cindex(true_survival, pred_risks):
     true_surv = [a[2] for a in true_survival]
+    true_event = [a[1] for a in true_survival]
     pred_risks = pred_risks[0] / pred_risks
     pred_risks = pred_risks.cpu().numpy()
-    c_indx = concordance_index(true_surv, pred_risks)
+    c_indx = concordance_index(true_surv, pred_risks, true_event)
     return c_indx
 
 
@@ -346,8 +347,12 @@ METRICS = [DICE]
 
 
 if __name__ == '__main__':
+
+
+
     true_surv = torch.as_tensor([0.76, 0.76, 0.33, 0.11])
-    pred_risks = torch.as_tensor([1,2,3,4])
+    pred_risks = torch.as_tensor([3,2,3,4])
+    pred_events = torch.as_tensor([1,0,1,0])
     true_surv = true_surv[0] / true_surv
-    c_indx = concordance_index(true_surv, pred_risks)
+    c_indx = concordance_index(true_surv, pred_risks, pred_events)
     print(c_indx)

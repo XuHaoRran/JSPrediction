@@ -1,8 +1,8 @@
 accumulation_steps: null
 amp_opt_level: O1
-batch_size: 1
+batch_size: 4
 cache_mode: part
-cfg: configs/vt_unet_tiny.yaml
+cfg: configs/vt_unet_base.yaml
 devices: '0'
 epochs: 300
 eval: false
@@ -18,5 +18,5 @@ throughput: false
 use_checkpoint: false
 val: 1
 weight_decay: 0
-workers: 2
+workers: 6
 zip: false

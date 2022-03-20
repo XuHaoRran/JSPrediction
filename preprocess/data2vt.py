@@ -145,10 +145,10 @@ def multi_thread_convert_patient(path,patient, p_info):
                     # label图像保存
                     write_img(img_path, save_seg_path)
                     seg = 1
-                # elif file.lower().__contains__("tumo") and not file.lower().__contains__("node"):
-                #     # label的tumor图像保存
-                #     write_img(img_path, save_seg_path)
-                #     seg = 1
+                elif file.lower().__contains__("tumo") and not file.lower().__contains__("node"):
+                    # label的tumor图像保存
+                    write_img(img_path, save_seg_path)
+                    seg = 1
         if pattern.lower().__contains__("c"):
             save_patient_t1c_path = os.path.join(save_patient_path, patient + "_t1c.nii.gz")
             for file in os.listdir(pattern_path):

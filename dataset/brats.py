@@ -60,8 +60,9 @@ class Brats(Dataset):
             et_present = 1 if np.sum(tumor) >= 1 else 0
             # 淋巴标签，如果存在标签2，则表示淋巴标签
             node = patient_label == 2
-
             patient_label = np.stack([tumor, node])
+            #分割值
+
         else:
             patient_label = np.zeros(patient_image.shape)  # placeholders, not gonna use it
             et_present = 0
